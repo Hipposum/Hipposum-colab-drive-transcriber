@@ -234,21 +234,9 @@ def retranscribe_zones(audio, problem_zones, config, device, sr=16000):
                 pass2_log.append({"zone": f"{zone['start']:.1f}-{zone['end']:.1f}",
                                    "status": "recovered", "n": len(good_segs)})
             else:
-                recovered.append({
-                    "start": round(zone["start"], 3),
-                    "end": round(zone["end"], 3),
-                    "text": f"[неразборчиво — {zone['end'] - zone['start']:.1f}с]",
-                    "speaker": "UNKNOWN", "_is_placeholder": True
-                })
                 pass2_log.append({"zone": f"{zone['start']:.1f}-{zone['end']:.1f}",
-                                   "status": "unrecognized"})
+                                   "status": "unrecognized_silence"})
         except Exception as e:
-            recovered.append({
-                "start": round(zone["start"], 3),
-                "end": round(zone["end"], 3),
-                "text": f"[неразборчиво — {zone['end'] - zone['start']:.1f}с]",
-                "speaker": "UNKNOWN", "_is_placeholder": True
-            })
             pass2_log.append({"zone": f"{zone['start']:.1f}-{zone['end']:.1f}",
                                "status": f"error: {str(e)[:50]}"})
 
