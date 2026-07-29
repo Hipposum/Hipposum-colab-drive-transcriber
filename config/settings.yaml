@@ -59,7 +59,7 @@ nr_stationary: true
 enable_pass2: true
 pass2_beam_size: 5
 pass2_temperature: 0.2
-pass2_no_speech: 0.1
+pass2_no_speech: 0.6
 pass2_compression: 2.0
 pass2_initial_prompt: ""
 pass2_padding_sec: 4.0
