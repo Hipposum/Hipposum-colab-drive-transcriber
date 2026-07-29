@@ -256,7 +256,44 @@ def detect_problem_zones(segments, n_raw, audio=None, sr=16000,
 # Объединение сегментов Pass1 + Pass2
 # ─────────────────────────────────────────────
 
-COVER_THRESHOLD = 0.5  # доля длительности Pass1-сегмента, покрытая Pass2, чтобы считать его заменённым
+FALLBACK_COVER_THRESHOLD = 0.5  # только если у сегмента почему-то нет words (см. ниже)
+
+
+def _words_in_any_range(words, ranges):
+    """Индексы слов, чьи тайминги пересекаются хотя бы с одним диапазоном (start, end)."""
+    hit = set()
+    for i, w in enumerate(words):
+        ws, we = w.get("start"), w.get("end")
+        if ws is None or we is None:
+            continue
+        if any(ws < r_end and we > r_start for r_start, r_end in ranges):
+            hit.add(i)
+    return hit
+
+
+def _split_into_runs(words, excluded_idx):
+    """Режет список слов на непрерывные куски, выбрасывая слова с индексом в excluded_idx."""
+    runs, cur = [], []
+    for i, w in enumerate(words):
+        if i in excluded_idx:
+            if cur:
+                runs.append(cur)
+                cur = []
+        else:
+            cur.append(w)
+    if cur:
+        runs.append(cur)
+    return runs
+
+
+def _segment_from_words(template_seg, words):
+    """Собирает новый сегмент из подмножества слов исходного (сохраняя остальные поля)."""
+    new_seg = dict(template_seg)
+    new_seg["words"] = words
+    new_seg["text"] = " ".join(w.get("word", "").strip() for w in words).strip()
+    new_seg["start"] = round(min(w["start"] for w in words), 3)
+    new_seg["end"] = round(max(w["end"] for w in words), 3)
+    return new_seg
 
 
 def merge_pass2_segments(clean_segments, recovered_segments):
@@ -264,48 +301,44 @@ def merge_pass2_segments(clean_segments, recovered_segments):
     Объединяет сегменты прохода 1 (clean_segments) и прохода 2 (recovered_segments) без
     дублирования И без потери контента.
 
-    Для каждого сегмента Pass 1 считаем суммарное перекрытие по времени со ВСЕМИ
-    сегментами Pass 2 (не только с соседним по сортировке — в этом была первая версия
-    бага). Если это перекрытие покрывает значительную часть (>= COVER_THRESHOLD)
-    длительности сегмента Pass 1 — сравниваем уверенность (avg_logprob) перекрывающих
-    сторон и оставляем только более надёжную версию. Если перекрытия нет вовсе —
-    Pass 2 эту часть проблемной зоны не восстановил, и Pass 1 остаётся как есть.
+    Проблемная зона может объединять несколько соседних низкоуверенных сегментов
+    (см. merge_zones), а один сегмент Pass 1 внутри такой зоны может быть длинным
+    (например, из-за одной смазанной фразы в конце вся многосекундная реплика
+    получает низкий средний avg_logprob целиком). Pass 2 при этом часто восстанавливает
+    только маленькую часть такой большой зоны. Решать судьбу сегмента Pass 1 ЦЕЛИКОМ
+    по общей доле перекрытия неверно в обе стороны: порог по всей длительности почти
+    никогда не достигается для маленькой Pass2-вставки внутри длинного сегмента (дубль
+    остаётся), а безусловное удаление всего сегмента при любом перекрытии стирает
+    корректную часть, которую Pass 2 не переозвучивал (потеря контента).
 
-    Важно: проблемная зона может объединять несколько соседних низкоуверенных
-    сегментов (см. merge_zones), а Pass 2 иногда восстанавливает лишь ЧАСТЬ такой
-    большой зоны (например, из-за более строгого VAD на проходе 2). Раньше это
-    приводило либо к задвоению текста (если просто добавлять Pass2 рядом), либо —
-    при попытке чистить по границам всей зоны целиком — к безвозвратной потере той
-    части Pass 1, которую Pass 2 не смог переозвучить. Посегментное сравнение
-    перекрытия избегает обеих проблем.
+    Поэтому здесь не решение "весь сегмент/ничего", а обрезка ПО СЛОВАМ: у сегмента
+    Pass 1 выбрасываются только те слова, чьи тайминги попадают в диапазон какого-либо
+    сегмента Pass 2 — остальные слова остаются (возможно, как несколько новых
+    более коротких сегментов, если вырезанный кусок оказался в середине). Требует
+    word-level таймингов (word_timestamps: true на обоих проходах — уже включено).
+    Сегмент без таймингов слов — редкий фолбэк на грубую оценку по всей длительности.
     """
-    recovered = list(recovered_segments)
-    kept_clean = []
-    dropped_recovered = set()
+    ranges = [(r["start"], r["end"]) for r in recovered_segments]
+    result = []
 
     for c in clean_segments:
-        c_dur = max(0.01, c["end"] - c["start"])
-        overlapping = []
-        total_overlap = 0.0
-        for idx, r in enumerate(recovered):
-            ov = max(0.0, min(c["end"], r["end"]) - max(c["start"], r["start"]))
-            if ov > 0:
-                overlapping.append(idx)
-                total_overlap += ov
-
-        if not overlapping or total_overlap / c_dur < COVER_THRESHOLD:
-            kept_clean.append(c)
+        words = c.get("words") or []
+        if not words or any(w.get("start") is None or w.get("end") is None for w in words):
+            # Нет пословных таймингов — грубая оценка по всей длительности сегмента.
+            c_dur = max(0.01, c["end"] - c["start"])
+            overlap = sum(max(0.0, min(c["end"], r_end) - max(c["start"], r_start))
+                         for r_start, r_end in ranges)
+            if overlap / c_dur < FALLBACK_COVER_THRESHOLD:
+                result.append(c)
             continue
 
-        c_conf = c.get("avg_logprob", -1.0)
-        rec_conf = sum(recovered[idx].get("avg_logprob", -1.0) for idx in overlapping) / len(overlapping)
-        if c_conf >= rec_conf:
-            # Pass1 надёжнее — оставляем его, выбрасываем перекрывающие фрагменты Pass2
-            kept_clean.append(c)
-            dropped_recovered.update(overlapping)
-        # иначе Pass2 надёжнее — Pass1-сегмент просто не добавляем в результат
+        excluded = _words_in_any_range(words, ranges)
+        if not excluded:
+            result.append(c)
+            continue
+        for run in _split_into_runs(words, excluded):
+            result.append(_segment_from_words(c, run))
 
-    final_recovered = [r for idx, r in enumerate(recovered) if idx not in dropped_recovered]
-    result = kept_clean + final_recovered
+    result += list(recovered_segments)
     result.sort(key=lambda s: s["start"])
     return result
