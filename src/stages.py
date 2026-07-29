@@ -17,7 +17,14 @@ from .problem_zones import detect_problem_zones, merge_pass2_segments
 from .diarization import run_diarization
 from .report import build_docx
 from .utils import free_gpu
-from .checkpoints import load_ckpt, save_ckpt, mark_stage, log_stage
+from .checkpoints import load_ckpt, save_ckpt, mark_stage, log_stage, drop_ckpt
+
+# Версия логики пост-обработки (детект проблемных зон + слияние Pass1/Pass2).
+# Бампни при любом изменении этой логики — иначе повторный запуск в той же
+# Colab-сессии (work_dir/чекпоинты переживают повторный запуск ячеек, если
+# рантайм не перезапускался) тихо подставит результат, посчитанный СТАРЫМ
+# кодом, и правки в problem_zones.py/stages.py не будет видно вообще.
+POSTPROCESS_VERSION = "2"
 
 
 def process_video(vf, ctx):
@@ -51,6 +58,18 @@ def process_video(vf, ctx):
     ckpt3 = load_ckpt(WORK_DIR, base_name, 3)
     ckpt4 = load_ckpt(WORK_DIR, base_name, 4)
     ckpt5 = load_ckpt(WORK_DIR, base_name, 5)
+
+    # Пост-обработка (s3) и всё, что от неё зависит (s4 выравнивание, s5 диаризация),
+    # пересчитываются заново, если код пост-обработки поменялся с прошлого запуска —
+    # иначе застрявший в work_dir кэш незаметно скрывает свежие правки.
+    if ckpt3 is not None and ckpt3.get("version") != POSTPROCESS_VERSION:
+        print(f"   ⚠ Логика пост-обработки изменилась (кэш v{ckpt3.get('version')} → "
+              f"v{POSTPROCESS_VERSION}) — пересчитываем этапы 3–5")
+        ckpt3 = ckpt4 = ckpt5 = None
+        drop_ckpt(WORK_DIR, base_name, 3)
+        drop_ckpt(WORK_DIR, base_name, 4)
+        drop_ckpt(WORK_DIR, base_name, 5)
+
     found = [s for s, c in [(2,ckpt2),(3,ckpt3),(4,ckpt4),(5,ckpt5)] if c]
     if found:
         print(f"   Найден чекпоинт: этапы {found} — продолжаем с места остановки")
@@ -134,7 +153,8 @@ def process_video(vf, ctx):
               f"неразборчиво: {n_placeholders}")
         save_ckpt(WORK_DIR, base_name, 3, {"segments_merged": segments_merged,
                                            "pass2_log": pass2_log, "n_removed": n_removed,
-                                           "n_recovered": n_recovered})
+                                           "n_recovered": n_recovered,
+                                           "version": POSTPROCESS_VERSION})
         mark_stage(WORK_DIR, base_name, 3, "done", seconds=time.time()-t0)
 
     # ── Этап 4: выравнивание ──

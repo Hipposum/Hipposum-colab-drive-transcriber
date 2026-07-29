@@ -56,6 +56,15 @@ def clear_ckpt(work_dir, base_name):
     shutil.rmtree(os.path.join(work_dir, f"_{base_name}_ckpt"), ignore_errors=True)
 
 
+def drop_ckpt(work_dir, base_name, stage):
+    """Удаляет чекпоинт ОДНОГО этапа (в отличие от clear_ckpt — не трогает остальные)."""
+    path = _ckpt_path(work_dir, base_name, stage)
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 # ─────────────────────────────────────────────
 # Манифест статусов этапов
 # ─────────────────────────────────────────────
