@@ -39,7 +39,42 @@ def _is_response_or_answer(w, prev_w=None):
     return False
 
 
-def _smooth_word_speakers(words, default_speaker):
+def _is_logical_answer(candidate_text, prev_text, llm_pipeline, llm_cache):
+    """Семантический VAD: использует микро-LLM для оценки, является ли фраза логичным ответом."""
+    if not llm_pipeline:
+        return False
+        
+    c_clean = candidate_text.strip()
+    p_clean = prev_text.strip()
+    if not c_clean or not p_clean:
+        return False
+
+    cache_key = f"{p_clean}|{c_clean}"
+    if cache_key in llm_cache:
+        return llm_cache[cache_key]
+
+    prompt = (
+        f"Учитель сказал: «{p_clean}»\n"
+        f"Ученик ответил: «{c_clean}»\n"
+        "Является ли эта фраза ученика логичным самостоятельным ответом? Ответь только Да или Нет."
+    )
+    messages = [
+        {"role": "system", "content": "Ты лингвистический анализатор. Отвечай строго одним словом: Да или Нет."},
+        {"role": "user", "content": prompt}
+    ]
+    
+    try:
+        out = llm_pipeline(messages, max_new_tokens=5, temperature=0.01, do_sample=False)
+        ans = out[0]['generated_text'][-1]['content'].strip().lower()
+        is_valid = ans.startswith("да")
+        llm_cache[cache_key] = is_valid
+        return is_valid
+    except Exception:
+        llm_cache[cache_key] = False
+        return False
+
+
+def _smooth_word_speakers(words, default_speaker, llm_pipeline=None, llm_cache=None):
     """
     Сглаживает смену спикера на уровне отдельного слова до разрезания сегментов.
     Убирает случайные артефакты диаризации, защищая при этом реальные короткие ответы (нет, да, угу).
@@ -83,7 +118,7 @@ def _smooth_word_speakers(words, default_speaker):
     return words
 
 
-def _split_segments_by_speaker(segments):
+def _split_segments_by_speaker(segments, llm_pipeline=None, llm_cache=None):
     """
     Разрезает сегменты по границам смены спикера на уровне СЛОВ.
     С предварительным сглаживанием пословной разметки, чтобы не отрывать одиночные слова.
@@ -98,7 +133,7 @@ def _split_segments_by_speaker(segments):
         default_spk = seg.get("speaker", "UNKNOWN")
 
         if len(words) >= 2 and all(("start" in w and "end" in w) for w in words):
-            words = _smooth_word_speakers(words, default_spk)
+            words = _smooth_word_speakers(words, default_spk, llm_pipeline, llm_cache)
 
         distinct = {w.get("speaker") for w in words if w.get("speaker")}
         if len(distinct) < 2 or len(words) < 2:
@@ -130,6 +165,11 @@ def _split_segments_by_speaker(segments):
                 if _is_response_or_answer(w, prev_w):
                     i += 1
                     continue
+                if llm_pipeline and i > 0:
+                    prev_text = " ".join(x.get("word", "").strip() for x in runs[i - 1]["words"])
+                    if _is_logical_answer(w.get("word", ""), prev_text, llm_pipeline, llm_cache):
+                        i += 1
+                        continue
 
                 # Попытка присоединить к предыдущему run
                 if i > 0:
@@ -173,7 +213,7 @@ def _split_segments_by_speaker(segments):
     return out
 
 
-def _merge_short_speaker_segments(segments, min_dur=MIN_SPEAKER_SEGMENT_SEC):
+def _merge_short_speaker_segments(segments, min_dur=MIN_SPEAKER_SEGMENT_SEC, llm_pipeline=None, llm_cache=None):
     """
     Пост-обработка: сливает микро-фрагменты (< 0.7с или <= 2 слов), ошибочно отделенные
     на границе или в середине реплики спикера.
@@ -197,8 +237,14 @@ def _merge_short_speaker_segments(segments, min_dur=MIN_SPEAKER_SEGMENT_SEC):
                 continue
 
             # Защита: если этот короткий сегмент — ответ (например, "Нет."), не трогаем его!
-            if words_count <= 2 and _is_response_or_answer({"word": seg.get("text", "").split()[0]}):
+            candidate_word = {"word": seg.get("text", "").split()[0]} if seg.get("text") else {"word": ""}
+            if words_count <= 2 and _is_response_or_answer(candidate_word):
                 continue
+                
+            if words_count <= 4 and llm_pipeline and i > 0:
+                prev_text = result[i - 1].get("text", "") if not result[i - 1].get("_is_placeholder") else ""
+                if _is_logical_answer(seg.get("text", ""), prev_text, llm_pipeline, llm_cache):
+                    continue
 
             # 1. Шаблон A -> B (короткий) -> A (в середине)
             if 0 < i < len(result) - 1:
@@ -333,7 +379,7 @@ def _diarize_whisperx(audio, model_name, hf_token, device, min_spk, max_spk, bat
     return out
 
 
-def run_diarization(audio, aligned_result, all_segments, placeholders_list, config, device, hf_token):
+def run_diarization(audio, aligned_result, all_segments, placeholders_list, config, device, hf_token, llm_pipeline=None):
     """
     Запускает диаризацию и присваивает спикеров сегментам.
 
@@ -375,8 +421,9 @@ def run_diarization(audio, aligned_result, all_segments, placeholders_list, conf
     # Пост-обработка спикеров:
     # 1) разрезаем сегменты со сменой спикера (фразы перестают «перемешиваться»)
     # 2) сливаем микро-артефакты обратно (разрывы одной фразы)
-    assign_result["segments"] = _split_segments_by_speaker(assign_result["segments"])
-    assign_result["segments"] = _merge_short_speaker_segments(assign_result["segments"])
+    llm_cache = {} if llm_pipeline else None
+    assign_result["segments"] = _split_segments_by_speaker(assign_result["segments"], llm_pipeline, llm_cache)
+    assign_result["segments"] = _merge_short_speaker_segments(assign_result["segments"], MIN_SPEAKER_SEGMENT_SEC, llm_pipeline, llm_cache)
 
     segments = sorted(
         assign_result["segments"] + placeholders_list,

@@ -191,8 +191,19 @@ def process_video(vf, ctx):
     elif DIARIZE and HF_TOKEN:
         t0 = time.time()
         try:
+            llm_pipeline = None
+            if cfg.get("use_semantic_vad"):
+                from transformers import pipeline
+                print("   Загрузка микро-LLM (Qwen2.5-0.5B-Instruct)...")
+                llm_pipeline = pipeline("text-generation", model="Qwen/Qwen2.5-0.5B-Instruct", device=DEVICE, torch_dtype="auto")
+                
             segments = run_diarization(audio, aligned_result, all_segments,
-                                       placeholders_list, cfg, DEVICE, HF_TOKEN)
+                                       placeholders_list, cfg, DEVICE, HF_TOKEN, llm_pipeline)
+            
+            if llm_pipeline:
+                del llm_pipeline
+                free_gpu()
+
             save_ckpt(WORK_DIR, base_name, 5, {"segments": segments})
             mark_stage(WORK_DIR, base_name, 5, "done", seconds=time.time()-t0)
         except Exception as e:

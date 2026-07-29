@@ -79,3 +79,4 @@ diarize_model: "pyannote/speaker-diarization-community-1"
 diarize_fallback_model: "pyannote/speaker-diarization-3.1"
 diarize_exclusive: true
 diarize_batch_size: 32   # безопасно для T4 (16 GB)
+use_semantic_vad: true   # использовать Qwen для оценки реплик

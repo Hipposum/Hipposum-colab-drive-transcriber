@@ -54,6 +54,7 @@ def load_config(config_path=None):
         ("PIPELINE_MIN_DURATION_SEC", "min_duration_sec",  int),
         ("PIPELINE_SKIP_DONE",        "skip_already_transcribed", _bool),
         ("PIPELINE_DIARIZE",          "diarize",           _bool),
+        ("PIPELINE_USE_SEMANTIC_VAD", "use_semantic_vad",  _bool),
     ]
     applied = []
     for env_key, cfg_key, cast in _overrides:
