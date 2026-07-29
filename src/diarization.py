@@ -196,6 +196,10 @@ def _merge_short_speaker_segments(segments, min_dur=MIN_SPEAKER_SEGMENT_SEC):
             if dur >= min_dur and words_count > MAX_MERGE_WORDS:
                 continue
 
+            # Защита: если этот короткий сегмент — ответ (например, "Нет."), не трогаем его!
+            if words_count <= 2 and _is_response_or_answer({"word": seg.get("text", "").split()[0]}):
+                continue
+
             # 1. Шаблон A -> B (короткий) -> A (в середине)
             if 0 < i < len(result) - 1:
                 prev, nxt = result[i - 1], result[i + 1]

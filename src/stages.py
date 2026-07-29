@@ -24,7 +24,8 @@ from .checkpoints import load_ckpt, save_ckpt, mark_stage, log_stage, drop_ckpt
 # Colab-сессии (work_dir/чекпоинты переживают повторный запуск ячеек, если
 # рантайм не перезапускался) тихо подставит результат, посчитанный СТАРЫМ
 # кодом, и правки в problem_zones.py/stages.py не будет видно вообще.
-POSTPROCESS_VERSION = "7"
+POSTPROCESS_VERSION = "8"
+TRANSCRIPTION_VERSION = "2"
 
 
 def process_video(vf, ctx):
@@ -59,9 +60,17 @@ def process_video(vf, ctx):
     ckpt4 = load_ckpt(WORK_DIR, base_name, 4)
     ckpt5 = load_ckpt(WORK_DIR, base_name, 5)
 
+    # Транскрибация (s2) инвалидируется при изменении параметров Whisper в settings.yaml
+    if ckpt2 is not None and ckpt2.get("version") != TRANSCRIPTION_VERSION:
+        print(f"   ⚠ Изменились настройки транскрибации (кэш v{ckpt2.get('version')} → "
+              f"v{TRANSCRIPTION_VERSION}) — пересчитываем этапы 2–5")
+        ckpt2 = ckpt3 = ckpt4 = ckpt5 = None
+        drop_ckpt(WORK_DIR, base_name, 2)
+        drop_ckpt(WORK_DIR, base_name, 3)
+        drop_ckpt(WORK_DIR, base_name, 4)
+        drop_ckpt(WORK_DIR, base_name, 5)
+
     # Пост-обработка (s3) и всё, что от неё зависит (s4 выравнивание, s5 диаризация),
-    # пересчитываются заново, если код пост-обработки поменялся с прошлого запуска —
-    # иначе застрявший в work_dir кэш незаметно скрывает свежие правки.
     if ckpt3 is not None and ckpt3.get("version") != POSTPROCESS_VERSION:
         print(f"   ⚠ Логика пост-обработки изменилась (кэш v{ckpt3.get('version')} → "
               f"v{POSTPROCESS_VERSION}) — пересчитываем этапы 3–5")
@@ -115,7 +124,8 @@ def process_video(vf, ctx):
             free_gpu()
             return skip("transcribe_error")
         save_ckpt(WORK_DIR, base_name, 2, {"segments": result["segments"], "n_raw": n_raw,
-                                           "audio_duration": round(audio_duration, 1)})
+                                           "audio_duration": round(audio_duration, 1),
+                                           "version": TRANSCRIPTION_VERSION})
         mark_stage(WORK_DIR, base_name, 2, "done", seconds=time.time()-t0)
 
     if n_raw == 0 and not ckpt3:
