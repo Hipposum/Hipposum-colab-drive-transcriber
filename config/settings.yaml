@@ -38,7 +38,7 @@ compression_ratio_threshold: 2.2
 temperature_fallback: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 # ВАЖНО: initial_prompt — ТОЛЬКО ключевые слова через запятую (не предложения!).
 # Полные предложения Whisper повторяет дословно при тишине — источник галлюцинаций.
-initial_prompt: "Урок, питон, Python, Ксюша, Макс, Вика, Решат, Маша, Артём, SQL, переменная Z, переменная A."
+initial_prompt: ""
 
 # ─── Silero VAD ───
 # ВАЖНО: use_silero_vad=false — при SNR < 10 дБ Silero даёт ложные срабатывания.
