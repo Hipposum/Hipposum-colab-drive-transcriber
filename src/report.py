@@ -12,7 +12,7 @@ report.py — сборка читаемого транскрипта в стил
 
 Реплики одного спикера группируются в абзацы: новый абзац начинается после
 заметной паузы либо когда абзац становится слишком длинным. Таймкод — начало абзаца.
-Дополнительно умеет собирать тот же транскрипт в .docx (python-docx).
+build_docx() собирает результат сразу в .docx (python-docx) — единственный выходной файл.
 """
 
 # ── Правила разбивки на абзацы (подобраны по эталонному файлу SpeechToText) ──
@@ -97,21 +97,6 @@ def build_speaker_blocks(segments, cfg=None):
         close_par()
         blocks.append(cur_block)
     return blocks
-
-
-def build_full_document(analytics, llm_result, segments, audio_duration, file_name="", path=None):
-    """Транскрипт в текстовом виде (главный .txt). analytics/llm_result не используются —
-    сигнатура сохранена для совместимости со stages.py."""
-    blocks = build_speaker_blocks(segments)
-    lines = []
-    if file_name:
-        lines.append(file_name)
-    for block in blocks:
-        lines.append("")
-        lines.append(f"{block['speaker']}:")
-        for par in block["paragraphs"]:
-            lines.append(f"{_fmt_hms(par['start'])} - {par['text']}")
-    return "\n".join(lines) + "\n"
 
 
 def build_docx(segments, file_name, out_path):

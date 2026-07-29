@@ -2,11 +2,10 @@
 stages.py — обработка ОДНОГО видео по этапам с пер-этапным кэшем.
 
 process_video() прогоняет: аудио → транскрибация → пост-обработка/Pass2 → выравнивание →
-диаризация → аналитика → сборка единого файла {base}.txt (шапка фактов + транскрипт).
-Каждый этап кэшируется: при обрыве повторный запуск продолжает с места остановки.
+диаризация → сборка транскрипта в {base}.docx. Каждый этап кэшируется: при обрыве
+повторный запуск продолжает с места остановки.
 """
 
-import json
 import os
 import time
 from pathlib import Path
@@ -16,9 +15,8 @@ from .transcription import (
 )
 from .problem_zones import detect_problem_zones, merge_pass2_segments
 from .diarization import run_diarization
-from .analytics import run_all_analytics
-from .report import build_full_document, build_docx
-from .utils import free_gpu, NpEncoder
+from .report import build_docx
+from .utils import free_gpu
 from .checkpoints import load_ckpt, save_ckpt, mark_stage, log_stage
 
 
@@ -53,8 +51,7 @@ def process_video(vf, ctx):
     ckpt3 = load_ckpt(WORK_DIR, base_name, 3)
     ckpt4 = load_ckpt(WORK_DIR, base_name, 4)
     ckpt5 = load_ckpt(WORK_DIR, base_name, 5)
-    ckpt6 = load_ckpt(WORK_DIR, base_name, 6)
-    found = [s for s, c in [(2,ckpt2),(3,ckpt3),(4,ckpt4),(5,ckpt5),(6,ckpt6)] if c]
+    found = [s for s, c in [(2,ckpt2),(3,ckpt3),(4,ckpt4),(5,ckpt5)] if c]
     if found:
         print(f"   Найден чекпоинт: этапы {found} — продолжаем с места остановки")
 
@@ -183,69 +180,23 @@ def process_video(vf, ctx):
         del audio
         free_gpu()
 
-    # ── Этап 6: аналитика (без аудио) ──
-    if ckpt6:
-        log_stage(6, "аналитика — из кэша")
-        analytics = ckpt6["analytics"]
-    else:
-        log_stage(6, "аналитика")
-        t0 = time.time()
-        analytics = run_all_analytics(segments, n_raw, n_removed, pass2_log)
-        save_ckpt(WORK_DIR, base_name, 6, {"analytics": analytics})
-        mark_stage(WORK_DIR, base_name, 6, "done", seconds=time.time()-t0)
-
-    # ── Этап 7: сборка единого файла (дешёвый, из кэша этапов) ──
-    log_stage(7, "сборка транскрипта")
+    # ── Этап 6: сборка .docx (дешёвый, из кэша этапов) ──
+    log_stage(6, "сборка .docx")
     video_dir = os.path.join(WORK_DIR, base_name)
     os.makedirs(video_dir, exist_ok=True)
-    saved_files = []
-
-    full_path = os.path.join(video_dir, f"{base_name}.txt")
-    with open(full_path, "w", encoding="utf-8") as f:
-        f.write(build_full_document(analytics, None, segments, audio_duration, file_name,
-                                    path=file_path))
-    print(f"   {os.path.basename(full_path)} ({os.path.getsize(full_path)/1024:.0f} KB)")
-    saved_files.append(full_path)
-
     docx_path = os.path.join(video_dir, f"{base_name}.docx")
     try:
         build_docx(segments, file_name, docx_path)
-        print(f"   {os.path.basename(docx_path)} ({os.path.getsize(docx_path)/1024:.0f} KB)")
-        saved_files.append(docx_path)
-    except ImportError:
-        print("   ⚠ python-docx не установлен — .docx пропущен (pip install python-docx)")
     except Exception as e:
-        print(f"   ⚠ .docx не собран: {str(e)[:80]}")
-
-    metrics_path = os.path.join(video_dir, f"{base_name}_metrics.json")
-    with open(metrics_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "file": file_name, "pipeline_version": "colab-drive-transcriber-v1",
-            "audio_duration_sec": round(audio_duration, 1),
-            "processing_sec": round(time.time() - total_start, 1),
-            "settings": {"model": WHISPER_MODEL,
-                         "diarize_model": cfg.get("diarize_model"),
-                         "diarize_exclusive": cfg.get("diarize_exclusive")},
-            "analytics": analytics,
-        }, f, ensure_ascii=False, indent=2, default=str)
-    saved_files.append(metrics_path)
-
-    segments_path = os.path.join(video_dir, f"{base_name}_segments.json")
-    try:
-        slim = [{"start": s.get("start"), "end": s.get("end"), "text": s.get("text", ""),
-                 "speaker": s.get("speaker"), "_is_placeholder": bool(s.get("_is_placeholder"))}
-                for s in segments]
-        with open(segments_path, "w", encoding="utf-8") as f:
-            json.dump({"file_name": file_name, "audio_duration": round(audio_duration, 1),
-                       "segments": slim}, f, ensure_ascii=False, cls=NpEncoder)
-        saved_files.append(segments_path)
-    except Exception as e:
-        print(f"   ⚠ segments.json не сохранён: {str(e)[:80]}")
-    mark_stage(WORK_DIR, base_name, 7, "done")
+        print(f"   ОШИБКА сборки .docx: {e} — пропуск (видео не удаляется, при повторном "
+              f"запуске транскрибация подхватится из кэша, останется только пересобрать файл)")
+        mark_stage(WORK_DIR, base_name, 6, "failed", extra={"error": str(e)[:120]})
+        return skip("docx_build_error")
+    print(f"   {os.path.basename(docx_path)} ({os.path.getsize(docx_path)/1024:.0f} KB)")
+    mark_stage(WORK_DIR, base_name, 6, "done")
 
     elapsed = time.time() - total_start
     return {"status": "done", "base_name": base_name, "file_name": file_name,
-            "file_path": file_path, "saved_files": saved_files,
-            "analytics": analytics,
+            "file_path": file_path, "saved_files": [docx_path],
             "audio_duration": audio_duration, "elapsed": elapsed,
             "n_raw": n_raw, "segments": segments}

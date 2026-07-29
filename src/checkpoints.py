@@ -15,7 +15,7 @@ from .utils import NpEncoder
 # Человекочитаемые имена этапов для логов и манифеста.
 STAGE_NAMES = {
     2: "transcribe", 3: "postprocess", 4: "align",
-    5: "diarize", 6: "analytics", 7: "llm", 8: "assemble",
+    5: "diarize", 6: "assemble",
 }
 
 
