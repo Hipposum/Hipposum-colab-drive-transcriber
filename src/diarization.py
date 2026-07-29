@@ -16,22 +16,55 @@ from .utils import free_gpu
 # длится ~0.5-1с — если поглощать всё <1.5с, такие реплики припишутся учителю и
 # ученик «исчезнет». Поэтому трогаем только совсем крошечные фрагменты И только когда
 # они зажаты между двумя репликами ОДНОГО спикера (явный признак разрыва одной фразы).
-MIN_SPEAKER_SEGMENT_SEC = 0.6
-MAX_MERGE_WORDS = 1     # не сливаем если в фрагменте есть реальные слова (>1 слова = речь)
-MAX_MERGE_GAP_SEC = 0.25  # фрагмент сливаем только если он ВПЛОТНУЮ к соседям (середина фразы)
+MIN_SPEAKER_SEGMENT_SEC = 0.7
+MAX_MERGE_WORDS = 2
+MAX_MERGE_GAP_SEC = 0.45
+
+
+def _smooth_word_speakers(words, default_speaker):
+    """
+    Сглаживает смену спикера на уровне отдельного слова до разрезания сегментов.
+    Убирает случайные артефакты диаризации на первом/последнем слове фразы (стык на 100-300 мс).
+    """
+    if not words or len(words) < 2:
+        return words
+
+    n = len(words)
+    # Помечаем тайминги и спикеров
+    for w in words:
+        if not w.get("speaker"):
+            w["speaker"] = default_speaker
+
+    # 1. Сглаживание изолированных микро-артефактов в середине
+    for i in range(1, n - 1):
+        prev_sp = words[i - 1].get("speaker")
+        cur_sp  = words[i].get("speaker")
+        next_sp = words[i + 1].get("speaker")
+        if prev_sp == next_sp and cur_sp != prev_sp:
+            gap_prev = words[i].get("start", 0) - words[i - 1].get("end", 0)
+            gap_next = words[i + 1].get("start", 0) - words[i].get("end", 0)
+            if gap_prev < MAX_MERGE_GAP_SEC or gap_next < MAX_MERGE_GAP_SEC:
+                words[i]["speaker"] = prev_sp
+
+    # 2. Первое слово (если оно 1 слово с другим спикером и слито по времени со 2-м)
+    if words[0].get("speaker") != words[1].get("speaker"):
+        gap = words[1].get("start", 0) - words[0].get("end", 0)
+        if gap < MAX_MERGE_GAP_SEC:
+            words[0]["speaker"] = words[1].get("speaker")
+
+    # 3. Последнее слово (если оно 1 слово с другим спикером и слито по времени с предпоследним)
+    if words[-1].get("speaker") != words[-2].get("speaker"):
+        gap = words[-1].get("start", 0) - words[-2].get("end", 0)
+        if gap < MAX_MERGE_GAP_SEC:
+            words[-1]["speaker"] = words[-2].get("speaker")
+
+    return words
 
 
 def _split_segments_by_speaker(segments):
     """
     Разрезает сегменты по границам смены спикера на уровне СЛОВ.
-
-    WhisperX назначает одного спикера на весь сегмент (по большинству слов). Если
-    внутри сегмента учитель закончил и сразу начал ученик — весь сегмент получает
-    одного спикера, и реплики «перемешиваются». Здесь мы используем пословную
-    разметку (word["speaker"]) и режем сегмент на части по сменам спикера.
-
-    Безопасность: режем ТОЛЬКО если у всех слов есть тайминги (start/end) и есть
-    ≥2 разных спикера. Иначе сегмент остаётся как есть (graceful fallback).
+    С предварительным сглаживанием пословной разметки, чтобы не отрывать одиночные слова.
     """
     out = []
     n_split = 0
@@ -40,28 +73,57 @@ def _split_segments_by_speaker(segments):
             out.append(seg)
             continue
         words = seg.get("words") or []
+        default_spk = seg.get("speaker", "UNKNOWN")
+
+        if len(words) >= 2 and all(("start" in w and "end" in w) for w in words):
+            words = _smooth_word_speakers(words, default_spk)
+
         distinct = {w.get("speaker") for w in words if w.get("speaker")}
-        # Нечего резать: <2 спикеров среди слов или слов слишком мало
         if len(distinct) < 2 or len(words) < 2:
             out.append(seg)
             continue
-        # Требуем тайминги у всех слов — иначе не режем (избегаем нулевых/кривых границ)
+
         if not all(("start" in w and "end" in w) for w in words):
             out.append(seg)
             continue
 
-        # Группируем подряд идущие слова по спикеру (слово без спикера наследует текущего)
+        # Группируем подряд идущие слова по спикеру
         runs = []
         cur = None
         for w in words:
-            wsp = w.get("speaker") or (cur["speaker"] if cur else seg.get("speaker"))
+            wsp = w.get("speaker") or (cur["speaker"] if cur else default_spk)
             if cur is None or wsp != cur["speaker"]:
                 cur = {"speaker": wsp, "words": [w]}
                 runs.append(cur)
             else:
                 cur["words"].append(w)
 
+        # Сглаживаем runs: не отделяем run из 1 короткого слова без ощутимой паузы (>0.5s)
+        i = 0
+        while i < len(runs):
+            run = runs[i]
+            if len(run["words"]) == 1:
+                w = run["words"][0]
+                # Попытка присоединить к предыдущему run
+                if i > 0:
+                    prev_w = runs[i - 1]["words"][-1]
+                    gap = w.get("start", 0) - prev_w.get("end", 0)
+                    if gap < MAX_MERGE_GAP_SEC:
+                        runs[i - 1]["words"].append(w)
+                        runs.pop(i)
+                        continue
+                # Попытка присоединить к следующему run
+                if i < len(runs) - 1:
+                    next_w = runs[i + 1]["words"][0]
+                    gap = next_w.get("start", 0) - w.get("end", 0)
+                    if gap < MAX_MERGE_GAP_SEC:
+                        runs[i + 1]["words"].insert(0, w)
+                        runs.pop(i)
+                        continue
+            i += 1
+
         if len(runs) <= 1:
+            seg["speaker"] = runs[0]["speaker"] if runs else default_spk
             out.append(seg)
             continue
 
@@ -86,21 +148,13 @@ def _split_segments_by_speaker(segments):
 
 def _merge_short_speaker_segments(segments, min_dur=MIN_SPEAKER_SEGMENT_SEC):
     """
-    Пост-обработка: чинит ошибку диаризации В СЕРЕДИНЕ фразы — когда одно слово
-    внутри непрерывной речи приписано другому спикеру (A → [слово] → A).
-
-    Сливаем фрагмент обратно ТОЛЬКО при ВСЕХ условиях:
-      - длительность < 0.6с и ≤1 слова (микро-фрагмент)
-      - оба соседа — один и тот же спикер
-      - фрагмент ВПЛОТНУЮ к соседям (зазоры < 0.25с) — признак разрыва одной фразы
-
-    Последнее условие критично: реальный ответ ученика ("да", "нет") идёт с паузами
-    вокруг (смена говорящего) — такие фрагменты НЕ трогаем, ученик не исчезает.
+    Пост-обработка: сливает микро-фрагменты (< 0.7с или <= 2 слов), ошибочно отделенные
+    на границе или в середине реплики спикера.
     """
     if not segments:
         return segments
 
-    result = [dict(s) for s in segments]  # shallow copy
+    result = [dict(s) for s in segments]
 
     changed = True
     passes = 0
@@ -111,33 +165,47 @@ def _merge_short_speaker_segments(segments, min_dur=MIN_SPEAKER_SEGMENT_SEC):
             if seg.get("_is_placeholder"):
                 continue
             dur = seg.get("end", 0) - seg.get("start", 0)
-            if dur >= min_dur:
+            words_count = len(seg.get("text", "").split())
+            if dur >= min_dur and words_count > MAX_MERGE_WORDS:
                 continue
-            if len(seg.get("text", "").split()) > MAX_MERGE_WORDS:
-                continue
-            if i == 0 or i == len(result) - 1:
-                continue
-            prev, nxt = result[i - 1], result[i + 1]
-            if prev.get("_is_placeholder") or nxt.get("_is_placeholder"):
-                continue
-            prev_speaker, next_speaker = prev.get("speaker"), nxt.get("speaker")
-            if not (prev_speaker and next_speaker and prev_speaker == next_speaker):
-                continue
-            # Зазоры до соседей — реальный ответ ученика имеет паузы, ошибка диаризации нет
-            gap_before = seg.get("start", 0) - prev.get("end", 0)
-            gap_after  = nxt.get("start", 0) - seg.get("end", 0)
-            if gap_before > MAX_MERGE_GAP_SEC or gap_after > MAX_MERGE_GAP_SEC:
-                continue
-            if result[i].get("speaker") != prev_speaker:
-                result[i]["speaker"] = prev_speaker
-                changed = True
+
+            # 1. Шаблон A -> B (короткий) -> A (в середине)
+            if 0 < i < len(result) - 1:
+                prev, nxt = result[i - 1], result[i + 1]
+                if not prev.get("_is_placeholder") and not nxt.get("_is_placeholder"):
+                    prev_sp, nxt_sp = prev.get("speaker"), nxt.get("speaker")
+                    if prev_sp and nxt_sp and prev_sp == nxt_sp:
+                        gap_before = seg.get("start", 0) - prev.get("end", 0)
+                        gap_after  = nxt.get("start", 0) - seg.get("end", 0)
+                        if gap_before <= MAX_MERGE_GAP_SEC or gap_after <= MAX_MERGE_GAP_SEC:
+                            if seg.get("speaker") != prev_sp:
+                                seg["speaker"] = prev_sp
+                                changed = True
+                                continue
+
+            # 2. Одиночное висящее слово в конце или начале предложения (присоединяем к соседней реплике без паузы)
+            if words_count <= 1:
+                if i > 0 and not result[i - 1].get("_is_placeholder"):
+                    prev = result[i - 1]
+                    gap_before = seg.get("start", 0) - prev.get("end", 0)
+                    if gap_before < 0.35:
+                        seg["speaker"] = prev.get("speaker")
+                        changed = True
+                        continue
+                if i < len(result) - 1 and not result[i + 1].get("_is_placeholder"):
+                    nxt = result[i + 1]
+                    gap_after = nxt.get("start", 0) - seg.get("end", 0)
+                    if gap_after < 0.35:
+                        seg["speaker"] = nxt.get("speaker")
+                        changed = True
+                        continue
 
     n_fixed = sum(
         1 for orig, new in zip(segments, result)
         if orig.get("speaker") != new.get("speaker")
     )
     if n_fixed:
-        print(f"   Пост-диаризация: слито {n_fixed} микро-фрагментов в середине фразы")
+        print(f"   Пост-диаризация: слито {n_fixed} микро-фрагментов спикеров")
 
     return result
 

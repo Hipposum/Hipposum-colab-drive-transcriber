@@ -276,17 +276,17 @@ def detect_problem_zones(segments, n_raw, audio=None, sr=16000,
 # Объединение сегментов Pass1 + Pass2
 # ─────────────────────────────────────────────
 
-FALLBACK_COVER_THRESHOLD = 0.5  # только если у сегмента почему-то нет words (см. ниже)
+FALLBACK_COVER_THRESHOLD = 0.15  # Порог перекрытия по времени для сегментов без пословных таймингов
 
 
-def _words_in_any_range(words, ranges):
-    """Индексы слов, чьи тайминги пересекаются хотя бы с одним диапазоном (start, end)."""
+def _words_in_any_range(words, ranges, margin=0.5):
+    """Индексы слов, чьи тайминги пересекаются хотя бы с одним диапазоном (start - margin, end + margin)."""
     hit = set()
     for i, w in enumerate(words):
         ws, we = w.get("start"), w.get("end")
         if ws is None or we is None:
             continue
-        if any(ws < r_end and we > r_start for r_start, r_end in ranges):
+        if any((ws < r_end + margin and we > r_start - margin) for r_start, r_end in ranges):
             hit.add(i)
     return hit
 
@@ -308,9 +308,12 @@ def _split_into_runs(words, excluded_idx):
 
 def _segment_from_words(template_seg, words):
     """Собирает новый сегмент из подмножества слов исходного (сохраняя остальные поля)."""
+    text = " ".join(w.get("word", "").strip() for w in words).strip()
+    if not text or len(text.replace(".", "").replace(",", "").strip()) == 0:
+        return None
     new_seg = dict(template_seg)
     new_seg["words"] = words
-    new_seg["text"] = " ".join(w.get("word", "").strip() for w in words).strip()
+    new_seg["text"] = text
     new_seg["start"] = round(min(w["start"] for w in words), 3)
     new_seg["end"] = round(max(w["end"] for w in words), 3)
     return new_seg
@@ -321,43 +324,40 @@ def merge_pass2_segments(clean_segments, recovered_segments):
     Объединяет сегменты прохода 1 (clean_segments) и прохода 2 (recovered_segments) без
     дублирования И без потери контента.
 
-    Проблемная зона может объединять несколько соседних низкоуверенных сегментов
-    (см. merge_zones), а один сегмент Pass 1 внутри такой зоны может быть длинным
-    (например, из-за одной смазанной фразы в конце вся многосекундная реплика
-    получает низкий средний avg_logprob целиком). Pass 2 при этом часто восстанавливает
-    только маленькую часть такой большой зоны. Решать судьбу сегмента Pass 1 ЦЕЛИКОМ
-    по общей доле перекрытия неверно в обе стороны: порог по всей длительности почти
-    никогда не достигается для маленькой Pass2-вставки внутри длинного сегмента (дубль
-    остаётся), а безусловное удаление всего сегмента при любом перекрытии стирает
-    корректную часть, которую Pass 2 не переозвучивал (потеря контента).
-
-    Поэтому здесь не решение "весь сегмент/ничего", а обрезка ПО СЛОВАМ: у сегмента
-    Pass 1 выбрасываются только те слова, чьи тайминги попадают в диапазон какого-либо
-    сегмента Pass 2 — остальные слова остаются (возможно, как несколько новых
-    более коротких сегментов, если вырезанный кусок оказался в середине). Требует
-    word-level таймингов (word_timestamps: true на обоих проходах — уже включено).
-    Сегмент без таймингов слов — редкий фолбэк на грубую оценку по всей длительности.
+    Выбрасывает из Pass 1 слова/сегменты, перекрывающиеся с диапазонами Pass 2
+    с учетом запаса (margin 0.5s), предотвращая дубликаты.
     """
+    if not recovered_segments:
+        return sorted(clean_segments, key=lambda s: s.get("start", 0))
+
     ranges = [(r["start"], r["end"]) for r in recovered_segments]
     result = []
 
     for c in clean_segments:
         words = c.get("words") or []
-        if not words or any(w.get("start") is None or w.get("end") is None for w in words):
-            # Нет пословных таймингов — грубая оценка по всей длительности сегмента.
+        has_valid_word_ts = words and all(w.get("start") is not None and w.get("end") is not None for w in words)
+        
+        if not has_valid_word_ts:
             c_dur = max(0.01, c["end"] - c["start"])
             overlap = sum(max(0.0, min(c["end"], r_end) - max(c["start"], r_start))
-                         for r_start, r_end in ranges)
+                          for r_start, r_end in ranges)
             if overlap / c_dur < FALLBACK_COVER_THRESHOLD:
                 result.append(c)
             continue
 
-        excluded = _words_in_any_range(words, ranges)
+        excluded = _words_in_any_range(words, ranges, margin=0.4)
         if not excluded:
             result.append(c)
             continue
+        
+        # Если исключены все слова — сегмент полностью заменен Pass 2
+        if len(excluded) == len(words):
+            continue
+
         for run in _split_into_runs(words, excluded):
-            result.append(_segment_from_words(c, run))
+            seg_from_words = _segment_from_words(c, run)
+            if seg_from_words is not None:
+                result.append(seg_from_words)
 
     result += list(recovered_segments)
     result.sort(key=lambda s: s["start"])
