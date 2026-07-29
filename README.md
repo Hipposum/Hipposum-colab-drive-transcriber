@@ -12,8 +12,8 @@
 
 1. Открой `colab_transcribe.ipynb` в [Google Colab](https://colab.research.google.com/)
    (File → Open notebook → GitHub, или загрузи файл вручную).
-2. Разовая настройка описана в шапке блокнота: включить T4 GPU, добавить секреты
-   `HF_TOKEN` и `GITHUB_TOKEN`, принять условия моделей pyannote на Hugging Face.
+2. Разовая настройка описана в шапке блокнота: включить T4 GPU, добавить секрет
+   `HF_TOKEN`, принять условия моделей pyannote на Hugging Face.
 3. Создай папку `Transcribe` на Google Drive, закинь туда видео.
 4. «Среда выполнения → Выполнить всё».
 
