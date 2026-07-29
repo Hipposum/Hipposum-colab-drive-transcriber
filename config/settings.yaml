@@ -32,9 +32,9 @@ beam_size: 5
 word_timestamps: true
 condition_on_previous: true
 chunk_length: 30        # ВАЖНО: 30 = нативное окно Whisper; меньше → ошибки диаризации
-# ВАЖНО: no_speech_threshold 0.60 — при 0.40 Whisper пропускает реальную речь при фоновом шуме.
-no_speech_threshold: 0.60
-compression_ratio_threshold: 2.4
+# ВАЖНО: no_speech_threshold 0.85 — чтобы Whisper пропускал речь только при 85%+ вероятности тишины.
+no_speech_threshold: 0.85
+compression_ratio_threshold: 2.6
 temperature_fallback: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 # ВАЖНО: initial_prompt — ТОЛЬКО ключевые слова через запятую (не предложения!).
 # Полные предложения Whisper повторяет дословно при тишине — источник галлюцинаций.
@@ -45,7 +45,7 @@ initial_prompt: ""
 # Без него Whisper (через pyannote VAD) пытается глотать 30-секундные куски и иногда 
 # удаляет целые предложения (например, 18 секунд) из-за внутренних фильтров галлюцинаций.
 use_silero_vad: true
-silero_threshold: 0.15
+silero_threshold: 0.10
 silero_min_speech_ms: 100
 silero_min_silence_ms: 600
 vad_onset: 0.05

@@ -25,7 +25,7 @@ from .checkpoints import load_ckpt, save_ckpt, mark_stage, log_stage, drop_ckpt
 # рантайм не перезапускался) тихо подставит результат, посчитанный СТАРЫМ
 # кодом, и правки в problem_zones.py/stages.py не будет видно вообще.
 POSTPROCESS_VERSION = "8"
-TRANSCRIPTION_VERSION = "5"
+TRANSCRIPTION_VERSION = "6"
 
 
 def process_video(vf, ctx):
