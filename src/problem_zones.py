@@ -256,27 +256,56 @@ def detect_problem_zones(segments, n_raw, audio=None, sr=16000,
 # Объединение сегментов Pass1 + Pass2
 # ─────────────────────────────────────────────
 
-def merge_pass2_segments(clean_segments, recovered_segments, problem_zones=(), pass2_padding_sec=0.0):
+COVER_THRESHOLD = 0.5  # доля длительности Pass1-сегмента, покрытая Pass2, чтобы считать его заменённым
+
+
+def merge_pass2_segments(clean_segments, recovered_segments):
     """
-    Объединяет сегменты прохода 1 (clean_segments) и прохода 2 (recovered_segments).
+    Объединяет сегменты прохода 1 (clean_segments) и прохода 2 (recovered_segments) без
+    дублирования И без потери контента.
 
-    Сегменты Pass 1, попавшие в проблемную зону, ПОЛНОСТЬЮ исключаются по времени зоны —
-    Pass 2 гарантированно покрывает ту же зону (текстом или плейсхолдером «[неразборчиво]»,
-    см. retranscribe_zones), так что подменять их безопасно без эвристик.
+    Для каждого сегмента Pass 1 считаем суммарное перекрытие по времени со ВСЕМИ
+    сегментами Pass 2 (не только с соседним по сортировке — в этом была первая версия
+    бага). Если это перекрытие покрывает значительную часть (>= COVER_THRESHOLD)
+    длительности сегмента Pass 1 — сравниваем уверенность (avg_logprob) перекрывающих
+    сторон и оставляем только более надёжную версию. Если перекрытия нет вовсе —
+    Pass 2 эту часть проблемной зоны не восстановил, и Pass 1 остаётся как есть.
 
-    Раньше здесь была проверка пересечения только с соседним по сортировке сегментом
-    (и однобокая по длительности) — если Pass 2 резал одну длинную проблемную зону на
-    несколько более коротких фрагментов, часть исходного Pass-1 текста не распознавалась
-    как дубликат и оставалась рядом с исправленным Pass-2 текстом, давая задвоенные фразы.
+    Важно: проблемная зона может объединять несколько соседних низкоуверенных
+    сегментов (см. merge_zones), а Pass 2 иногда восстанавливает лишь ЧАСТЬ такой
+    большой зоны (например, из-за более строгого VAD на проходе 2). Раньше это
+    приводило либо к задвоению текста (если просто добавлять Pass2 рядом), либо —
+    при попытке чистить по границам всей зоны целиком — к безвозвратной потере той
+    части Pass 1, которую Pass 2 не смог переозвучить. Посегментное сравнение
+    перекрытия избегает обеих проблем.
     """
-    padded_zones = [(z["start"] - pass2_padding_sec, z["end"] + pass2_padding_sec)
-                    for z in problem_zones]
+    recovered = list(recovered_segments)
+    kept_clean = []
+    dropped_recovered = set()
 
-    def in_problem_zone(seg):
-        return any(seg["start"] < z_end and seg["end"] > z_start
-                   for z_start, z_end in padded_zones)
+    for c in clean_segments:
+        c_dur = max(0.01, c["end"] - c["start"])
+        overlapping = []
+        total_overlap = 0.0
+        for idx, r in enumerate(recovered):
+            ov = max(0.0, min(c["end"], r["end"]) - max(c["start"], r["start"]))
+            if ov > 0:
+                overlapping.append(idx)
+                total_overlap += ov
 
-    kept_clean = [s for s in clean_segments if not in_problem_zone(s)]
-    result = kept_clean + list(recovered_segments)
+        if not overlapping or total_overlap / c_dur < COVER_THRESHOLD:
+            kept_clean.append(c)
+            continue
+
+        c_conf = c.get("avg_logprob", -1.0)
+        rec_conf = sum(recovered[idx].get("avg_logprob", -1.0) for idx in overlapping) / len(overlapping)
+        if c_conf >= rec_conf:
+            # Pass1 надёжнее — оставляем его, выбрасываем перекрывающие фрагменты Pass2
+            kept_clean.append(c)
+            dropped_recovered.update(overlapping)
+        # иначе Pass2 надёжнее — Pass1-сегмент просто не добавляем в результат
+
+    final_recovered = [r for idx, r in enumerate(recovered) if idx not in dropped_recovered]
+    result = kept_clean + final_recovered
     result.sort(key=lambda s: s["start"])
     return result
