@@ -183,7 +183,10 @@ def retranscribe_zones(audio, problem_zones, config, device, sr=16000):
     if PASS2_INITIAL_PROMPT:
         asr_options_p2["initial_prompt"] = PASS2_INITIAL_PROMPT
 
-    vad_options_p2 = {"vad_onset": 0.2, "vad_offset": 0.3}
+    vad_options_p2 = {
+        "vad_onset": config.get("vad_onset", 0.05),
+        "vad_offset": config.get("vad_offset", 0.10)
+    }
     base_device = device.split(":")[0] if ":" in device else device
     device_index = int(device.split(":")[1]) if ":" in device else 0
     
