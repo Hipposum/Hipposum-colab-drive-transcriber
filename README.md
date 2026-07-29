@@ -1,0 +1,70 @@
+# Colab Drive Transcriber
+
+Транскрибация видео с разделением по спикерам в Google Colab (бесплатный T4 GPU).
+Вход и выход — папка на Google Drive: положил видео → запустил блокнот → в той же
+папке появились транскрипты с таймкодами и метками спикеров.
+
+Под капотом: **WhisperX large-v3** (транскрибация + чистка галлюцинаций + повторный
+проход по проблемным зонам + пословное выравнивание wav2vec2) и
+**pyannote speaker-diarization-community-1** (диаризация, фолбэк на 3.1).
+
+## Как пользоваться
+
+1. Открой `colab_transcribe.ipynb` в [Google Colab](https://colab.research.google.com/)
+   (File → Open notebook → GitHub, или загрузи файл вручную).
+2. Разовая настройка описана в шапке блокнота: включить T4 GPU, добавить секреты
+   `HF_TOKEN` и `GITHUB_TOKEN`, принять условия моделей pyannote на Hugging Face.
+3. Создай папку `Transcribe` на Google Drive, закинь туда видео.
+4. «Среда выполнения → Выполнить всё».
+
+Результаты — в `Transcribe/_results/<имя видео>/`:
+
+| Файл | Что внутри |
+|------|-----------|
+| `<имя>.txt` | главный: шапка фактов + транскрипт `[ММ:СС] SPEAKER_00: реплика` |
+| `<имя>_metrics.json` | метрики (длительность, баланс речи, паузы) |
+| `<имя>_segments.json` | сегменты с таймкодами и спикерами — удобно скармливать LLM |
+
+Скорость на T4: ~5–8 минут на час видео без диаризации, ~10–15 минут с ней.
+Если сессия Colab оборвалась — просто запусти всё заново: этапы кэшируются на Drive,
+готовые видео пропускаются, недоделанные продолжаются с места остановки.
+
+## Архитектура
+
+```
+colab-drive-transcriber/
+├── colab_transcribe.ipynb   # блокнот для Colab (главный вход)
+├── config/settings.yaml     # все настройки; переопределяются env PIPELINE_*
+└── src/
+    ├── runner.py            # точка входа: python -m src.runner
+    ├── stages.py            # этапы обработки одного видео + чекпоинты
+    ├── transcription.py     # Whisper Pass1/Pass2, загрузка аудио, VAD
+    ├── problem_zones.py     # детект галлюцинаций и проблемных зон
+    ├── diarization.py       # pyannote community-1 (fallback 3.1) + пост-обработка
+    ├── analytics.py         # факты: баланс речи, паузы, формат
+    ├── report.py            # сборка итогового .txt
+    ├── storage.py           # скан локальной папки, ZIP, прогресс
+    ├── checkpoints.py       # пер-этапный кэш (resume)
+    ├── naming.py            # дата/имя из имени файла
+    └── utils.py             # GPU, форматирование, статистика
+```
+
+Поток: аудио 16kHz → Whisper Pass1 → чистка галлюцинаций + Pass2 проблемных зон →
+выравнивание слов → диаризация → аналитика → `{имя}.txt`.
+
+Код вырос из внутреннего пайплайна whisperx-pipeline (транскрибация уроков);
+здесь оставлена только транскрипция — без LLM-анализа и интеграций.
+
+## Локальный запуск (не Colab)
+
+Нужен NVIDIA GPU, Python 3.10+, ffmpeg.
+
+```bash
+pip install -r requirements.txt
+export HF_TOKEN=hf_...
+PIPELINE_LOCAL_DIR=/path/to/videos PIPELINE_WORK_DIR=/path/to/results python -m src.runner
+```
+
+## Лицензия
+
+MIT

@@ -1,0 +1,22 @@
+# В Colab ставится через ячейку установки в блокноте (там точный порядок
+# и --no-deps для whisperx, чтобы не переустанавливать torch).
+# Этот файл — для локального запуска / справки.
+whisperx
+faster-whisper
+ctranslate2
+av
+tokenizers>=0.13
+pyannote.audio>=4.0
+speechbrain
+asteroid-filterbanks
+torch-audiomentations
+einops
+lightning
+transformers>=4.40,<4.52
+huggingface-hub>=0.20
+noisereduce
+soundfile
+nltk
+pyyaml
+hyperpyyaml
+rich

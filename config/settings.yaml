@@ -1,0 +1,72 @@
+# ═══════════════════════════════════════════════════════
+# Colab Drive Transcriber — настройки
+# Секрет HF_TOKEN задаётся через переменную среды.
+# Любой параметр можно переопределить env-переменной PIPELINE_* (см. src/runner.py).
+# ═══════════════════════════════════════════════════════
+
+# ─── Вход/выход ───
+local_dir: ""            # папка с видео (смонтированный Google Drive)
+local_file: ""           # либо путь к одному файлу (имеет приоритет над local_dir)
+work_dir: "/content/results"       # куда класть результаты и чекпоинты
+download_dir: "/content/videos_tmp" # временная папка (распаковка ZIP)
+
+max_videos: 0            # 0 = все найденные
+skip_already_transcribed: true
+min_duration_sec: 30     # видео короче — пропускать
+
+# ─── Whisper — проход 1 (основной) ───
+language: "ru"
+whisper_model: "large-v3"
+batch_size: 12          # На T4 (16 GB) безопасно
+compute_type: "float16"
+beam_size: 5
+word_timestamps: true
+condition_on_previous: false
+chunk_length: 30        # ВАЖНО: 30 = нативное окно Whisper; меньше → ошибки диаризации
+# ВАЖНО: no_speech_threshold 0.05 провоцирует галлюцинации — Whisper транскрибирует тишину.
+no_speech_threshold: 0.40
+compression_ratio_threshold: 2.2
+temperature_fallback: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+# ВАЖНО: initial_prompt — ТОЛЬКО ключевые слова через запятую (не предложения!).
+# Полные предложения Whisper повторяет дословно при тишине — источник галлюцинаций.
+initial_prompt: false
+
+# ─── Silero VAD ───
+# ВАЖНО: use_silero_vad=false — при SNR < 10 дБ Silero даёт ложные срабатывания.
+# pyannote built-in VAD (onset/offset) работает надёжнее при плохом качестве записи.
+use_silero_vad: false
+silero_threshold: 0.15
+silero_min_speech_ms: 100
+silero_min_silence_ms: 600
+vad_onset: 0.05
+vad_offset: 0.10
+
+# ─── Шумоподавление ───
+use_noise_reduce: false  # Whisper large-v3 справляется с шумом сам; NR искажает речь
+nr_prop_decrease: 0.4
+nr_stationary: true
+
+# ─── Проход 2 (повторная транскрибация проблемных зон) ───
+enable_pass2: true
+pass2_beam_size: 5
+pass2_temperature: 0.2
+pass2_no_speech: 0.1
+pass2_compression: 2.0
+pass2_initial_prompt: ""
+pass2_padding_sec: 4.0
+pass2_min_zone_sec: 0.3
+pass2_low_confidence: 0.45
+
+# ─── Alignment + Диаризация ───
+align_model: null
+return_char_alignments: false
+interpolate_method: "nearest"
+diarize: true
+min_speakers: 1
+max_speakers: 6
+# community-1 (2025) точнее 3.1, ловит перекрытие речи и умеет exclusive-режим.
+# Требует pyannote.audio>=4 и принятия условий модели на HF (тот же HF_TOKEN).
+diarize_model: "pyannote/speaker-diarization-community-1"
+diarize_fallback_model: "pyannote/speaker-diarization-3.1"
+diarize_exclusive: true
+diarize_batch_size: 32   # безопасно для T4 (16 GB)

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+results/
+videos_tmp/
+_ckpt/
+.ipynb_checkpoints/
