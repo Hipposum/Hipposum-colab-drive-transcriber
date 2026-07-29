@@ -1,14 +1,23 @@
 # ═══════════════════════════════════════════════════════
 # Colab Drive Transcriber — настройки
-# Секрет HF_TOKEN задаётся через переменную среды.
+# Секреты (HF_TOKEN, YANDEX_TOKEN) задаются через переменные среды.
 # Любой параметр можно переопределить env-переменной PIPELINE_* (см. src/runner.py).
 # ═══════════════════════════════════════════════════════
 
-# ─── Вход/выход ───
-local_dir: ""            # папка с видео (смонтированный Google Drive)
-local_file: ""           # либо путь к одному файлу (имеет приоритет над local_dir)
-work_dir: "/content/results"       # куда класть результаты и чекпоинты
-download_dir: "/content/videos_tmp" # временная папка (распаковка ZIP)
+# ─── Источник видео ───
+mode: "yadisk"           # "yadisk" — папка на Яндекс.Диске | "local" — локальная папка/файл
+
+# yadisk: видео сканируются в videos_folder; результат кладётся рядом с видео на Диске
+# (если структура папок неизвестна заранее — в output_folder).
+videos_folder: "/Transcribe"
+output_folder: "/Transcribe/_results"
+
+# local: папка с видео (например, смонтированный Google Drive) либо один файл
+local_dir: ""
+local_file: ""           # если задан — имеет приоритет над local_dir
+
+work_dir: "/content/results"        # результаты и чекпоинты (local-режим и кэш yadisk-режима)
+download_dir: "/content/videos_tmp" # временная папка (скачивание с Диска / распаковка ZIP)
 
 max_videos: 0            # 0 = все найденные
 skip_already_transcribed: true
