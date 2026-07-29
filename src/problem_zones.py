@@ -254,6 +254,33 @@ def detect_problem_zones(segments, n_raw, audio=None, sr=16000,
                 problems.append({"start": gap_start, "end": gap_end,
                                  "reason": "large_gap_with_speech",
                                  "original_text": f"gap {gap:.1f}s"})
+    
+    # ── Проверка начала и конца файла ─────────────────────────────────
+    if clean:
+        # Проверяем начало
+        if clean[0]["start"] > 3.0:
+            gap_start = 0.0
+            gap_end = clean[0]["start"]
+            if gap_end < 120.0:
+                has_speech = True
+                if audio is not None and len(audio) > 0:
+                    has_speech = check_speech_in_gap(audio, gap_start, gap_end, sr)
+                if has_speech:
+                    problems.append({"start": gap_start, "end": gap_end,
+                                     "reason": "missing_start",
+                                     "original_text": f"gap {gap_end:.1f}s"})
+        
+        # Проверяем конец
+        if audio is not None and len(audio) > 0:
+            audio_dur = len(audio) / sr
+            if audio_dur - clean[-1]["end"] > 3.0:
+                gap_start = clean[-1]["end"]
+                gap_end = audio_dur
+                if gap_end - gap_start < 120.0:
+                    if check_speech_in_gap(audio, gap_start, gap_end, sr):
+                        problems.append({"start": gap_start, "end": gap_end,
+                                         "reason": "missing_end",
+                                         "original_text": f"gap {gap_end - gap_start:.1f}s"})
 
     problems = merge_zones(problems)
 
