@@ -144,8 +144,17 @@ def detect_problem_zones(segments, n_raw, audio=None, sr=16000,
     removed = []
 
     # Скользящее окно по ВРЕМЕНИ для поиска повторений.
-    # Whisper-петли случаются в течение секунд, а учитель может законно повторить
-    # фразу через несколько минут. Окно 90 сек ловит петли, не трогая педагогические повторения.
+    # Whisper-петли (модель зацикливается и штампует одну фразу подряд) случаются
+    # В ТЕЧЕНИЕ СЕКУНД. Короткие частые слова («угу», «да», «нет», «ну», «так») —
+    # самые частые слова в любом уроке и совершенно законно повторяются (разными
+    # людьми, в разных репликах) чаще, чем раз в 1.5 минуты — широкое окно принимало
+    # обычную речь за галлюцинацию и вырезало реальные реплики. Поэтому короткий
+    # текст (≤ SHORT_TEXT_LEN симв.) считаем повтором только при повторении СРАЗУ
+    # (секунды — признак настоящей петли), а не где-то в пределах всего урока.
+    # Длинные фразы (полное предложение) случайно совпасть не могут — для них
+    # оставляем широкое окно.
+    SHORT_TEXT_LEN = 15
+    SHORT_REPEAT_WINDOW_SEC = 6
     REPEAT_TIME_WINDOW_SEC = 90
     recent_texts = []  # list of (text_lower, t_start)
 
@@ -163,25 +172,36 @@ def detect_problem_zones(segments, n_raw, audio=None, sr=16000,
                             "time": f"{t_start:.1f}s", "detail": reason or "pattern"})
             continue
 
-        # ── 2. Слишком короткий / пустой ──────────────────────────────
-        if dur < 0.3 and len(text) <= 2:
+        # ── 2. Слишком короткий / пустой ───────────────────────────────
+        # Убираем короткий текст ТОЛЬКО если модель сама сомневалась (высокий
+        # no_speech_prob или низкий avg_logprob) — иначе рискуем стереть чётко
+        # произнесённое короткое слово («да», «но») только из-за его длины.
+        no_speech_prob = seg.get("no_speech_prob", 0.0)
+        seg_avg_logprob = seg.get("avg_logprob", 0.0)
+        if dur < 0.3 and len(text) <= 2 and (no_speech_prob > 0.3 or seg_avg_logprob < -0.6):
             removed.append({"reason": "too_short", "text": text,
                             "time": f"{t_start:.1f}s"})
             continue
 
         # ── 3. Повторяющийся текст в скользящем временно́м окне ───────
-        # Сначала убираем устаревшие записи (старше REPEAT_TIME_WINDOW_SEC)
-        recent_texts = [(t, ts) for t, ts in recent_texts
-                        if t_start - ts <= REPEAT_TIME_WINDOW_SEC]
+        # Убираем устаревшие записи: для коротких текстов — своё узкое окно
+        # (ловит только настоящие петли декодера), для длинных — широкое.
+        is_short_text = len(text.strip()) <= SHORT_TEXT_LEN
+        window = SHORT_REPEAT_WINDOW_SEC if is_short_text else REPEAT_TIME_WINDOW_SEC
+        recent_texts = [(t, ts, w) for t, ts, w in recent_texts if t_start - ts <= w]
 
         text_lower = text.lower()
         is_repeat = False
-        for prev_text, prev_time in recent_texts:
+        for prev_text, prev_time, prev_window in recent_texts:
+            # Совпадение засчитываем, только если попадает в окно ОБЕИХ записей —
+            # короткая фраза не должна «продлевать жизнь» длинной записи и наоборот.
+            if t_start - prev_time > min(window, prev_window):
+                continue
             if text_lower == prev_text:
                 is_repeat = True
                 break
-            # Near-duplicate: один текст содержит другой на ≥80%
-            if len(text_lower) > 15 and len(prev_text) > 15:
+            # Near-duplicate: один текст содержит другой на ≥80% (только для длинных)
+            if not is_short_text and len(text_lower) > 15 and len(prev_text) > 15:
                 shorter, longer = sorted([text_lower, prev_text], key=len)
                 if shorter in longer and len(shorter) / len(longer) > 0.8:
                     is_repeat = True
@@ -191,7 +211,7 @@ def detect_problem_zones(segments, n_raw, audio=None, sr=16000,
                             "time": f"{t_start:.1f}s"})
             continue
 
-        recent_texts.append((text_lower, t_start))
+        recent_texts.append((text_lower, t_start, window))
 
         # ── 4. Низкая уверенность слов → Pass 2 ──────────────────────
         words = seg.get("words", [])
