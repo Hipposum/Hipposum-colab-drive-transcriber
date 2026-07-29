@@ -256,32 +256,27 @@ def detect_problem_zones(segments, n_raw, audio=None, sr=16000,
 # Объединение сегментов Pass1 + Pass2
 # ─────────────────────────────────────────────
 
-def merge_pass2_segments(clean_segments, recovered_segments):
+def merge_pass2_segments(clean_segments, recovered_segments, problem_zones=(), pass2_padding_sec=0.0):
     """
-    Объединяет сегменты прохода 1 и прохода 2.
-    Удаляет дубли: если Pass2-сегмент перекрывается с Pass1 более чем на 50% — выбрасываем Pass2.
-    """
-    all_segs = clean_segments + recovered_segments
-    all_segs.sort(key=lambda s: s["start"])
+    Объединяет сегменты прохода 1 (clean_segments) и прохода 2 (recovered_segments).
 
-    result = []
-    for seg in all_segs:
-        if not result:
-            result.append(seg)
-            continue
-        prev = result[-1]
-        overlap_start = max(seg["start"], prev["start"])
-        overlap_end   = min(seg["end"],   prev["end"])
-        overlap = max(0.0, overlap_end - overlap_start)
-        seg_dur = max(0.01, seg["end"] - seg["start"])
-        # Если текущий сегмент перекрывается с предыдущим более чем на 40% — пропускаем
-        if overlap / seg_dur > 0.4:
-            # Оставляем тот у которого выше уверенность (или Pass1 по умолчанию)
-            seg_conf  = seg.get("avg_logprob", -1.0)
-            prev_conf = prev.get("avg_logprob", -1.0)
-            if seg_conf > prev_conf:
-                result[-1] = seg
-            # иначе оставляем prev
-            continue
-        result.append(seg)
+    Сегменты Pass 1, попавшие в проблемную зону, ПОЛНОСТЬЮ исключаются по времени зоны —
+    Pass 2 гарантированно покрывает ту же зону (текстом или плейсхолдером «[неразборчиво]»,
+    см. retranscribe_zones), так что подменять их безопасно без эвристик.
+
+    Раньше здесь была проверка пересечения только с соседним по сортировке сегментом
+    (и однобокая по длительности) — если Pass 2 резал одну длинную проблемную зону на
+    несколько более коротких фрагментов, часть исходного Pass-1 текста не распознавалась
+    как дубликат и оставалась рядом с исправленным Pass-2 текстом, давая задвоенные фразы.
+    """
+    padded_zones = [(z["start"] - pass2_padding_sec, z["end"] + pass2_padding_sec)
+                    for z in problem_zones]
+
+    def in_problem_zone(seg):
+        return any(seg["start"] < z_end and seg["end"] > z_start
+                   for z_start, z_end in padded_zones)
+
+    kept_clean = [s for s in clean_segments if not in_problem_zone(s)]
+    result = kept_clean + list(recovered_segments)
+    result.sort(key=lambda s: s["start"])
     return result

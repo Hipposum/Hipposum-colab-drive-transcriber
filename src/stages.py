@@ -120,14 +120,16 @@ def process_video(vf, ctx):
         pass2_log = []
         if ENABLE_PASS2 and problem_zones:
             recovered_segs, pass2_log = retranscribe_zones(audio, problem_zones, cfg, DEVICE)
-            segments_merged = merge_pass2_segments(clean_segs, recovered_segs)
+            segments_merged = merge_pass2_segments(
+                clean_segs, recovered_segs, problem_zones,
+                pass2_padding_sec=cfg.get("pass2_padding_sec", 4.0))
         else:
             placeholders = [{
                 "start": round(z["start"], 3), "end": round(z["end"], 3),
                 "text": f"[неразборчиво — {z['end'] - z['start']:.1f}с]",
                 "speaker": "UNKNOWN", "_is_placeholder": True,
             } for z in problem_zones]
-            segments_merged = merge_pass2_segments(clean_segs, placeholders)
+            segments_merged = merge_pass2_segments(clean_segs, placeholders, problem_zones)
         n_recovered = sum(1 for l in pass2_log if l.get("status") == "recovered")
         n_placeholders = sum(1 for s in segments_merged if s.get("_is_placeholder"))
         print(f"   Итого: {len(segments_merged)} сегм. | восстановлено: {n_recovered} | "
