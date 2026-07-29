@@ -20,11 +20,25 @@ MIN_SPEAKER_SEGMENT_SEC = 0.7
 MAX_MERGE_WORDS = 2
 MAX_MERGE_GAP_SEC = 0.45
 
+RESPONSE_WORDS = {"нет", "да", "угу", "ага", "так", "верно", "точно", "понятно", "неа"}
+
+
+def _is_response_or_answer(w, prev_w=None):
+    """Проверяет, является ли слово короткой репликой-ответом (нет, да, угу) или ответом на вопрос."""
+    w_clean = w.get("word", "").strip().lower().rstrip(".,!?")
+    if w_clean in RESPONSE_WORDS:
+        return True
+    if prev_w:
+        prev_str = prev_w.get("word", "").strip()
+        if prev_str.endswith("?"):
+            return True
+    return False
+
 
 def _smooth_word_speakers(words, default_speaker):
     """
     Сглаживает смену спикера на уровне отдельного слова до разрезания сегментов.
-    Убирает случайные артефакты диаризации на первом/последнем слове фразы (стык на 100-300 мс).
+    Убирает случайные артефакты диаризации, защищая при этом реальные короткие ответы (нет, да, угу).
     """
     if not words or len(words) < 2:
         return words
@@ -41,22 +55,26 @@ def _smooth_word_speakers(words, default_speaker):
         cur_sp  = words[i].get("speaker")
         next_sp = words[i + 1].get("speaker")
         if prev_sp == next_sp and cur_sp != prev_sp:
+            if _is_response_or_answer(words[i], words[i - 1]):
+                continue
             gap_prev = words[i].get("start", 0) - words[i - 1].get("end", 0)
             gap_next = words[i + 1].get("start", 0) - words[i].get("end", 0)
-            if gap_prev < MAX_MERGE_GAP_SEC or gap_next < MAX_MERGE_GAP_SEC:
+            if gap_prev < 0.25 and gap_next < 0.25:
                 words[i]["speaker"] = prev_sp
 
-    # 2. Первое слово (если оно 1 слово с другим спикером и слито по времени со 2-м)
+    # 2. Первое слово (если оно 1 слово с другим спикером и не ответ)
     if words[0].get("speaker") != words[1].get("speaker"):
-        gap = words[1].get("start", 0) - words[0].get("end", 0)
-        if gap < MAX_MERGE_GAP_SEC:
-            words[0]["speaker"] = words[1].get("speaker")
+        if not _is_response_or_answer(words[0]):
+            gap = words[1].get("start", 0) - words[0].get("end", 0)
+            if gap < MAX_MERGE_GAP_SEC:
+                words[0]["speaker"] = words[1].get("speaker")
 
-    # 3. Последнее слово (если оно 1 слово с другим спикером и слито по времени с предпоследним)
+    # 3. Последнее слово (если оно 1 слово с другим спикером и предпоследним и не ответ)
     if words[-1].get("speaker") != words[-2].get("speaker"):
-        gap = words[-1].get("start", 0) - words[-2].get("end", 0)
-        if gap < MAX_MERGE_GAP_SEC:
-            words[-1]["speaker"] = words[-2].get("speaker")
+        if not _is_response_or_answer(words[-1], words[-2]):
+            gap = words[-1].get("start", 0) - words[-2].get("end", 0)
+            if gap < MAX_MERGE_GAP_SEC:
+                words[-1]["speaker"] = words[-2].get("speaker")
 
     return words
 
@@ -98,12 +116,17 @@ def _split_segments_by_speaker(segments):
             else:
                 cur["words"].append(w)
 
-        # Сглаживаем runs: не отделяем run из 1 короткого слова без ощутимой паузы (>0.5s)
+        # Сглаживаем runs: не отделяем run из 1 короткого слова (кроме ответов "нет", "да", "угу"!)
         i = 0
         while i < len(runs):
             run = runs[i]
             if len(run["words"]) == 1:
                 w = run["words"][0]
+                prev_w = runs[i - 1]["words"][-1] if i > 0 else None
+                if _is_response_or_answer(w, prev_w):
+                    i += 1
+                    continue
+
                 # Попытка присоединить к предыдущему run
                 if i > 0:
                     prev_w = runs[i - 1]["words"][-1]

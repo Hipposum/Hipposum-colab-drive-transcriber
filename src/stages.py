@@ -24,7 +24,7 @@ from .checkpoints import load_ckpt, save_ckpt, mark_stage, log_stage, drop_ckpt
 # Colab-сессии (work_dir/чекпоинты переживают повторный запуск ячеек, если
 # рантайм не перезапускался) тихо подставит результат, посчитанный СТАРЫМ
 # кодом, и правки в problem_zones.py/stages.py не будет видно вообще.
-POSTPROCESS_VERSION = "5"
+POSTPROCESS_VERSION = "6"
 
 
 def process_video(vf, ctx):

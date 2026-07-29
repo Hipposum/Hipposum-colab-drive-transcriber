@@ -32,8 +32,8 @@ beam_size: 5
 word_timestamps: true
 condition_on_previous: false
 chunk_length: 30        # ВАЖНО: 30 = нативное окно Whisper; меньше → ошибки диаризации
-# ВАЖНО: no_speech_threshold 0.05 провоцирует галлюцинации — Whisper транскрибирует тишину.
-no_speech_threshold: 0.40
+# ВАЖНО: no_speech_threshold 0.60 — при 0.40 Whisper пропускает реальную речь при фоновом шуме.
+no_speech_threshold: 0.60
 compression_ratio_threshold: 2.2
 temperature_fallback: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 # ВАЖНО: initial_prompt — ТОЛЬКО ключевые слова через запятую (не предложения!).
