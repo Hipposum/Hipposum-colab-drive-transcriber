@@ -41,9 +41,10 @@ temperature_fallback: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 initial_prompt: ""
 
 # ─── Silero VAD ───
-# ВАЖНО: use_silero_vad=false — при SNR < 10 дБ Silero даёт ложные срабатывания.
-# pyannote built-in VAD (onset/offset) работает надёжнее при плохом качестве записи.
-use_silero_vad: false
+# ВАЖНО: use_silero_vad=true — Silero намного лучше нарезает аудио на мелкие куски.
+# Без него Whisper (через pyannote VAD) пытается глотать 30-секундные куски и иногда 
+# удаляет целые предложения (например, 18 секунд) из-за внутренних фильтров галлюцинаций.
+use_silero_vad: true
 silero_threshold: 0.15
 silero_min_speech_ms: 100
 silero_min_silence_ms: 600
