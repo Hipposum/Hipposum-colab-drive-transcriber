@@ -209,18 +209,26 @@ def retranscribe_zones(audio, problem_zones, config, device, sr=16000):
 
         chunk = audio[int(z_start * sr):int(z_end * sr)]
         try:
-            result = model_p2.transcribe(
-                chunk, batch_size=BATCH_SIZE, language=LANGUAGE,
-                chunk_size=int(z_dur) + 1, print_progress=False
+            # Используем напрямую faster-whisper, чтобы обойти pyannote VAD,
+            # который может агрессивно обрезать конец фразы при паузе.
+            segments, info = model_p2.model.transcribe(
+                chunk, language=LANGUAGE, **asr_options_p2
             )
             good_segs = []
-            for seg in result.get("segments", []):
-                text = seg.get("text", "").strip()
-                hall, _ = is_hallucination_segment(seg)
+            for s in segments:
+                text = s.text.strip()
+                seg_dict = {
+                    "start": s.start,
+                    "end": s.end,
+                    "text": text,
+                    "avg_logprob": getattr(s, "avg_logprob", 0.0),
+                    "no_speech_prob": getattr(s, "no_speech_prob", 0.0)
+                }
+                hall, _ = is_hallucination_segment(seg_dict)
                 if text and not hall:
-                    seg["start"] = round(seg["start"] + z_start, 3)
-                    seg["end"]   = round(seg["end"]   + z_start, 3)
-                    good_segs.append(seg)
+                    seg_dict["start"] = round(seg_dict["start"] + z_start, 3)
+                    seg_dict["end"]   = round(seg_dict["end"]   + z_start, 3)
+                    good_segs.append(seg_dict)
             if good_segs:
                 recovered.extend(good_segs)
                 pass2_log.append({"zone": f"{zone['start']:.1f}-{zone['end']:.1f}",
