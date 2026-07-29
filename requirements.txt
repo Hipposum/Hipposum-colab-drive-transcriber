@@ -20,3 +20,4 @@ nltk
 pyyaml
 hyperpyyaml
 rich
+python-docx

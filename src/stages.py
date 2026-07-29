@@ -17,7 +17,7 @@ from .transcription import (
 from .problem_zones import detect_problem_zones, merge_pass2_segments
 from .diarization import run_diarization
 from .analytics import run_all_analytics
-from .report import build_full_document
+from .report import build_full_document, build_docx
 from .utils import free_gpu, NpEncoder
 from .checkpoints import load_ckpt, save_ckpt, mark_stage, log_stage
 
@@ -206,6 +206,16 @@ def process_video(vf, ctx):
                                     path=file_path))
     print(f"   {os.path.basename(full_path)} ({os.path.getsize(full_path)/1024:.0f} KB)")
     saved_files.append(full_path)
+
+    docx_path = os.path.join(video_dir, f"{base_name}.docx")
+    try:
+        build_docx(segments, file_name, docx_path)
+        print(f"   {os.path.basename(docx_path)} ({os.path.getsize(docx_path)/1024:.0f} KB)")
+        saved_files.append(docx_path)
+    except ImportError:
+        print("   ⚠ python-docx не установлен — .docx пропущен (pip install python-docx)")
+    except Exception as e:
+        print(f"   ⚠ .docx не собран: {str(e)[:80]}")
 
     metrics_path = os.path.join(video_dir, f"{base_name}_metrics.json")
     with open(metrics_path, "w", encoding="utf-8") as f:
